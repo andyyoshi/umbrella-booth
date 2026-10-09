@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0E4561">
+<title>Umbrella Booth</title>
+<!--
+  Umbrella Booth - prototype booth page.
+  No CDN, no web fonts, no analytics. Leaflet is bundled locally so nothing is
+  fetched from a third party just to load the page.
+
+  TWO IDEAS WORTH KNOWING ABOUT
+  -----------------------------
+  1. ONE PAGE, MANY BOOTHS.  The booth is a short number in the address:
+         .../umbrella-booth/?b=03
+     Each booth gets its own sticker but they all open this same page, so
+     changing the page changes every booth at once.
+
+  2. LOCATION IS OPT-IN AND NEVER LEAVES THE PHONE.  "Find the nearest booth"
+     asks for location only when tapped, uses it in the browser to sort the
+     booths by distance, and sends it nowhere. There is no server to send it to:
+     this is a static page.
+
+  Map tiles are only requested once the student opts in, so simply opening the
+  page makes no external requests at all.
+-->
+<link rel="stylesheet" href="leaflet/leaflet.css">
+<style>
+  :root{
+    --bg:#F7F7F7; --ink:#0E4561; --soft:#4B7488; --faint:#8AA4B1;
+    --rule:#C7D6DE; --panel:#7894A0; --band:#DAE4E9;
+    --flag:#B0763A; --flagbg:#F5E9DA; --good:#2F6F63;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","Trebuchet MS",Roboto,Helvetica,Arial,sans-serif;
+    --serif:Georgia,"Times New Roman",serif;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--ink); font-family:var(--sans);
+    font-size:17px; line-height:1.5; padding:22px 20px 40px;
+    max-width:560px; margin:0 auto; min-height:100vh;
+  }
+  .dots{display:flex; align-items:center; gap:0; margin:0 0 18px}
+  .dots i{width:9px;height:9px;border-radius:50%;background:var(--ink);
+          display:block;margin-right:7px}
+  .dots b{flex:1;height:2px;background:var(--ink);display:block;margin-left:5px}
+
+  h1{font-family:var(--serif); font-style:italic; font-weight:700;
+     font-size:34px; line-height:1.1; margin:0 0 4px; letter-spacing:-.01em}
+  .sub{color:var(--soft); font-size:14px; margin:0 0 22px}
+
+  .card{background:#fff; border:1px solid var(--rule); border-radius:8px;
+        padding:18px; margin:0 0 16px}
+  .card.tint{background:var(--band); border-color:var(--band)}
+  .label{font-size:11px; letter-spacing:.13em; text-transform:uppercase;
+         color:var(--faint); font-weight:700; margin:0 0 8px}
+  .big{font-family:var(--serif); font-size:44px; line-height:1; margin:0;
+       font-variant-numeric:tabular-nums}
+  .big em{font-style:normal; font-size:20px; color:var(--soft)}
+
+  .bar{height:6px;border-radius:3px;background:var(--rule);overflow:hidden;
+       margin:14px 0 6px}
+  .bar span{display:block;height:100%;background:var(--panel);
+            transition:width .5s ease}
+
+  button{
+    font-family:var(--sans); font-size:17px; font-weight:600;
+    width:100%; padding:17px 18px; border-radius:8px; cursor:pointer;
+    border:1px solid var(--ink); background:var(--ink); color:#fff;
+    transition:opacity .15s, transform .06s;
+  }
+  button:active{transform:translateY(1px)}
+  button.ghost{background:transparent;color:var(--ink)}
+  button[disabled]{opacity:.45; cursor:default}
+  button + button{margin-top:10px}
+
+  .slot{font-family:var(--serif); font-size:76px; line-height:1; margin:6px 0 2px;
+        color:var(--ink); font-variant-numeric:tabular-nums}
+  .ok{color:var(--good)}
+  .note{color:var(--faint); font-size:13px; margin:10px 0 0}
+  .warn{background:var(--flagbg); border:1px solid var(--flag);
+        color:var(--flag); border-radius:8px; padding:12px 14px; font-size:14px;
+        margin:0 0 16px}
+
+  ul.sites{list-style:none; margin:0; padding:0}
+  ul.sites li{display:flex; justify-content:space-between; gap:12px;
+              padding:11px 0; border-bottom:1px solid var(--rule); font-size:15px}
+  ul.sites li:last-child{border-bottom:0}
+  ul.sites b{font-weight:600}
+  ul.sites span{color:var(--faint); font-size:13px; white-space:nowrap}
+  .here{color:var(--good); font-weight:700}
+  ul.sites li.pick{cursor:pointer}
+  ul.sites li.pick:hover b{text-decoration:underline}
+  ul.sites li.near{background:var(--band); margin:0 -18px; padding-left:18px;
+                   padding-right:18px; border-bottom-color:var(--band)}
+
+  /* --- map --- */
+  #map{height:300px; border-radius:8px; border:1px solid var(--rule);
+       margin:0 0 16px; background:var(--band)}
+  #map.hidden{display:none}
+  .pin{border-radius:50% 50% 50% 0; transform:rotate(-45deg);
+       border:2px solid #fff; box-shadow:0 1px 4px rgba(0,0,0,.35)}
+  .pin i{display:block; transform:rotate(45deg); color:#fff; font-weight:700;
+         font-size:11px; text-align:center; line-height:20px; font-style:normal}
+  .pin.booth{width:26px;height:26px;background:var(--panel)}
+  .pin.near{background:var(--good); width:30px;height:30px}
+  .pin.near i{line-height:24px; font-size:12px}
+  .pin.you{width:18px;height:18px;background:var(--ink);
+           border-radius:50%; transform:none; border:3px solid #fff}
+  .loc-copy{font-size:15px; color:var(--soft); margin:0 0 10px}
+  .loc-priv{font-size:13px; color:var(--good); margin:0 0 14px;
+            display:flex; gap:8px; align-items:flex-start}
+  .loc-priv b{font-weight:700}
+  code{font-family:ui-monospace,Menlo,monospace; font-size:13px;
+       background:var(--band); padding:2px 6px; border-radius:4px}
+  footer{color:var(--faint); font-size:12px; line-height:1.6;
+         margin-top:26px; padding-top:16px; border-top:1px solid var(--rule)}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+
+<div class="dots"><i></i><i></i><i></i><i></i><i></i><b></b></div>
+
+<h1>Umbrella Booth</h1>
+<p class="sub" id="sub">Scan, take one, return it to any booth.</p>
+
+<div id="warn" class="warn hidden">
+  This is a prototype page. Nothing here unlocks real hardware yet.
+</div>
+
+<!-- ---------------- BOOTH PICKER ---------------- -->
+<section id="pick" class="hidden">
+  <div class="card">
+    <p class="label">Which booth are you at?</p>
+    <ul class="sites" id="picklist"></ul>
+    <p class="note">The sticker on each booth carries its number, so this page
+      can open straight to the right one.</p>
+  </div>
+</section>
+
+<!-- ---------------- HOME ---------------- -->
+<section id="home" class="hidden">
+  <div class="card tint">
+    <p class="label" id="boothname">Booth</p>
+    <p class="big"><span id="avail">8</span><em> / 10 available</em></p>
+    <div class="bar"><span id="bar" style="width:80%"></span></div>
+    <p class="note" id="status">Ready to lend.</p>
+    <p class="note hidden" id="cardstatus"></p>
+  </div>
+
+  <button id="btn-take">Tap your student&nbsp;ID</button>
+  <button id="btn-return" class="ghost">Returning an umbrella</button>
+  <button id="btn-find" class="ghost">Find the nearest booth</button>
+
+  <div class="card" style="margin-top:16px">
+    <p class="label">Booths on campus</p>
+    <ul class="sites" id="allbooths"></ul>
+  </div>
+</section>
+
+<!-- ---------------- NEAREST BOOTH ---------------- -->
+<section id="nearby" class="hidden">
+  <div class="card" id="loc-ask">
+    <p class="label">Find the nearest booth</p>
+    <p class="loc-copy">Your phone can sort the booths by how far away they are,
+      so you know which one to walk to.</p>
+    <p class="loc-priv"><span>&#128274;</span><span><b>Your location stays on
+      this phone.</b> It is used in the browser to work out distances and is
+      never sent to us or anyone else &mdash; there is no server to send it
+      to.</span></p>
+    <button id="btn-loc">Allow location and show me</button>
+    <button id="btn-close-near" class="ghost">Back</button>
+  </div>
+
+  <div id="map" class="hidden"></div>
+
+  <div class="card" id="near-card">
+    <p class="label" id="near-title">Booths</p>
+    <ul class="sites" id="nearlist"></ul>
+    <p class="note" id="near-note"></p>
+  </div>
+</section>
+
+<!-- ---------------- COORDINATE CAPTURE (?setloc=NN) ---------------- -->
+<section id="capture" class="hidden">
+  <div class="card">
+    <p class="label">Set booth coordinates</p>
+    <p class="loc-copy">Stand at the booth, then read the position below into
+      <code>BOOTHS</code> in <code>site/index.html</code>.</p>
+    <p class="big" id="cap-coords" style="font-size:24px">&mdash;</p>
+    <p class="note" id="cap-note"></p>
+    <button id="btn-cap">Read position here</button>
+  </div>
+</section>
+
+<!-- ---------------- READ CARD ---------------- -->
+<section id="reading" class="hidden">
+  <div class="card tint" style="text-align:center; padding:34px 18px">
+    <p class="label">Reading card</p>
+    <p class="slot" id="dots-anim">&middot;&middot;&middot;</p>
+    <p class="note">Hold your card against the reader.</p>
+  </div>
+</section>
+
+<!-- ---------------- UNLOCKED / LOANED ---------------- -->
+<section id="unlocked" class="hidden">
+  <div class="card tint" style="text-align:center">
+    <p class="label">Slot unlocked</p>
+    <p class="slot ok" id="slotno">7</p>
+    <p class="note" id="slotmsg">Take the umbrella in slot 7.</p>
+  </div>
+  <button id="btn-done">I have taken it</button>
+</section>
+
+<section id="refused" class="hidden">
+  <div class="card" style="border-color:var(--flag)">
+    <p class="label" style="color:var(--flag)">One umbrella at a time</p>
+    <p class="loc-copy" id="ref-detail"></p>
+    <p class="loc-copy" style="margin-bottom:0">Lost it? Speak to the library
+      desk &mdash; staff can clear the record.</p>
+  </div>
+  <button id="btn-ref-back">Back</button>
+</section>
+
+<section id="loaned" class="hidden">
+  <div class="card" style="text-align:center">
+    <p class="label">On loan</p>
+    <p class="slot ok">&#10003;</p>
+    <p class="note" id="loanmsg">Due back by the end of the school day. Return it to any booth.</p>
+  </div>
+  <button id="btn-again" class="ghost">Done</button>
+</section>
+
+<footer>
+  Umbrella Booth &mdash; Engineering DFV project.<br>
+  The finished booth reads your student ID card directly. This page is the
+  prototype stand-in and the public information page.<br>
+  The system stores your card ID, the booth, the slot number and the time. No
+  name, no class, no photo, and the record is cleared when you return the
+  umbrella. Location is optional and never leaves your phone.
+</footer>
+
+<script src="leaflet/leaflet.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var CAP = 10;                       // umbrellas per booth
+  var KEY = "ub.state.v3";
+
+  // ------------------------------------------------------------------
+  // THE BOOTHS - SAS Puxi.
+  // The lat/lon values are PLACEHOLDERS: a plausible spread anchored on the
+  // real campus, but never measured. Replace them with real readings - stand
+  // at a booth, open this page with ?setloc=03, tap the button, and paste the
+  // numbers in. Keep the ids in step with src/make_qr.py.
+  // ------------------------------------------------------------------
+  var BOOTHS = [
+    { id: "01", name: "Gate 5",              lat: 31.20493, lon: 121.27635 },
+    { id: "02", name: "Gate 4",              lat: 31.20606, lon: 121.27846 },
+    { id: "03", name: "Cafeteria",           lat: 31.20640, lon: 121.27511 },
+    { id: "04", name: "STEM area staircase", lat: 31.20576, lon: 121.27742 },
+    { id: "05", name: "Annex commons",       lat: 31.20606, lon: 121.27747 },
+    { id: "06", name: "Library",             lat: 31.20576, lon: 121.27688 }
+  ];
+  var CAMPUS = [31.20676, 121.27610];   // SAS Puxi, centre of the campus map
+
+  // The campus map image, drawn in place of map tiles: it shows the actual
+  // buildings, and using it means the page fetches nothing from a third party.
+  var MAP_IMAGE = "campus-map.jpg";
+  var MAP_BOUNDS = [[31.20444, 121.27317], [31.20923, 121.27903]];
+
+  var params = new URLSearchParams(location.search);
+  var DEMO = params.get("proto") !== "0";
+  var $ = function (id) { return document.getElementById(id); };
+
+  var state = load();
+  var booth = findBooth(params.get("b"));
+  var map = null, youMarker = null, boothMarkers = {};
+
+  function findBooth(id) {
+    if (!id) return null;
+    id = String(id).replace(/^0+/, "") || "0";
+    for (var i = 0; i < BOOTHS.length; i++) {
+      if (BOOTHS[i].id.replace(/^0+/, "") === id) return BOOTHS[i];
+    }
+    return null;
+  }
+  function load() {
+    try {
+      var s = JSON.parse(localStorage.getItem(KEY));
+      if (s && s.in && typeof s.in === "object" && s.loans) return s;
+    } catch (e) {}
+    return {
+      in:    { "01": 8, "02": 6, "03": 9, "04": 7, "05": 5, "06": 4 },
+      loans: {}
+    };
+  }
+  function save() {
+    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
+  }
+  function inBooth(id) {
+    return typeof state.in[id] === "number" ? state.in[id] : CAP;
+  }
+  function availFor(id) { return Math.max(0, Math.min(CAP, inBooth(id))); }
+
+  // ---- one umbrella at a time -------------------------------------------
+  // The card is the key. A card with an umbrella still out cannot take a
+  // second one until it comes back. This is the whole anti-theft rule, and it
+  // needs nothing the booth does not already record: card, booth, slot, time.
+  var CARD = (function () {
+    var c = null;
+    try { c = localStorage.getItem("ub.card"); } catch (e) {}
+    if (!c) {
+      c = "SIM-" + Math.random().toString(36).slice(2, 7).toUpperCase();
+      try { localStorage.setItem("ub.card", c); } catch (e) {}
+    }
+    return c;
+  })();
+  function openLoan() { return state.loans[CARD] || null; }
+
+  function show(id) {
+    ["pick", "home", "nearby", "capture", "reading", "unlocked", "loaned",
+     "refused"]
+      .forEach(function (s) { $(s).classList.toggle("hidden", s !== id); });
+    window.scrollTo(0, 0);
+  }
+
+  // ---- distance -------------------------------------------------------
+  function metres(aLat, aLon, bLat, bLon) {
+    var R = 6371000, r = Math.PI / 180;
+    var dLat = (bLat - aLat) * r, dLon = (bLon - aLon) * r;
+    var s = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(aLat * r) * Math.cos(bLat * r) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
+  }
+  function bearing(aLat, aLon, bLat, bLon) {
+    var r = Math.PI / 180;
+    var y = Math.sin((bLon - aLon) * r) * Math.cos(bLat * r);
+    var x = Math.cos(aLat * r) * Math.sin(bLat * r) -
+            Math.sin(aLat * r) * Math.cos(bLat * r) *
+            Math.cos((bLon - aLon) * r);
+    var d = (Math.atan2(y, x) / r + 360) % 360;
+    var dirs = ["north", "north-east", "east", "south-east",
+                "south", "south-west", "west", "north-west"];
+    return dirs[Math.round(d / 45) % 8];
+  }
+  function pretty(m) {
+    return m < 950 ? Math.round(m / 5) * 5 + " m"
+                   : (m / 1000).toFixed(1) + " km";
+  }
+
+  // ---- lists ----------------------------------------------------------
+  function fillList(ul, opts) {
+    ul.innerHTML = "";
+    var rows = BOOTHS.slice();
+    if (opts && opts.here) {
+      rows.sort(function (a, b) { return a._d - b._d; });
+    }
+    rows.forEach(function (b) {
+      var li = document.createElement("li");
+      var right;
+      if (opts && opts.here) {
+        right = pretty(b._d) + " " + b._dir;
+      } else {
+        var a = availFor(b.id);
+        right = (booth && booth.id === b.id)
+          ? '<em class="here">you are here</em>'
+          : a + " available";
+      }
+      li.innerHTML = "<b>" + (opts && opts.number ? b.id + " \u00b7 " : "") +
+                     b.name + "</b><span>" + right + "</span>";
+      var cls = [];
+      if (opts && opts.click) {
+        cls.push("pick");
+        li.addEventListener("click", opts.click(b));
+      }
+      if (opts && opts.here && b._d === rows[0]._d) cls.push("near");
+      if (cls.length) li.className = cls.join(" ");
+      ul.appendChild(li);
+    });
+  }
+
+  function paint() {
+    var a = availFor(booth.id);
+    $("boothname").textContent = "Booth " + booth.id + " \u00b7 " + booth.name;
+    $("avail").textContent = a;
+    $("bar").style.width = (a / CAP * 100) + "%";
+    $("status").textContent = a === 0
+      ? "Empty. Check another booth below."
+      : (a <= 2 ? "Almost empty." : "Ready to lend.");
+    var open = openLoan();
+    $("btn-take").disabled = a === 0;
+    $("btn-return").disabled = !open;
+    if (open) {
+      var when = new Date(open.at).toLocaleTimeString([],
+                   { hour: "2-digit", minute: "2-digit" });
+      $("cardstatus").textContent = "Your card has umbrella " + open.slot +
+        " out, taken from " + open.fromName + " at " + when +
+        ". Return it to borrow again.";
+      $("cardstatus").classList.remove("hidden");
+    } else {
+      $("cardstatus").classList.add("hidden");
+    }
+    fillList($("allbooths"), {});
+  }
+
+  function start() {
+    document.title = "Umbrella Booth " + booth.id + " \u00b7 " + booth.name;
+    $("sub").textContent = booth.name +
+      " \u2014 scan, take one, return it to any booth.";
+    paint();
+    show("home");
+  }
+
+  // ---- map ------------------------------------------------------------
+  function buildMap(center, zoom) {
+    if (map || typeof L === "undefined") return;
+    map = L.map("map", {
+      zoomControl: false,
+      attributionControl: false,
+      maxBounds: L.latLngBounds(MAP_BOUNDS).pad(0.05),
+      minZoom: 15, maxZoom: 19
+    }).setView(center, zoom || 17);
+    // The campus map image, not map tiles. Nothing is fetched from a third
+    // party, so this works on any network and needs no tile server.
+    L.imageOverlay(MAP_IMAGE, MAP_BOUNDS).addTo(map);
+    L.control.attribution({ prefix: false, position: "bottomright" })
+     .addAttribution("Campus map &copy; Shanghai American School")
+     .addTo(map);
+  }
+  function pin(cls, label) {
+    return L.divIcon({
+      className: "", iconSize: [26, 26], iconAnchor: [13, 26],
+      html: '<div class="pin ' + cls + '"><i>' + label + "</i></div>"
+    });
+  }
+
+  function drawMap(here, nearest) {
+    if (typeof L === "undefined") return false;
+    buildMap(here ? [here.lat, here.lon] : CAMPUS, here ? 17 : 16);
+    if (!map) return false;
+    BOOTHS.forEach(function (b) {
+      if (boothMarkers[b.id]) map.removeLayer(boothMarkers[b.id]);
+      boothMarkers[b.id] = L.marker([b.lat, b.lon],
+        { icon: pin(b === nearest ? "booth near" : "booth", b.id) })
+        .addTo(map).bindPopup(b.name);
+    });
+    if (here) {
+      if (youMarker) map.removeLayer(youMarker);
+      youMarker = L.marker([here.lat, here.lon],
+        { icon: pin("you", "") }).addTo(map).bindPopup("You are here");
+      if (here.acc) {
+        L.circle([here.lat, here.lon],
+                 { radius: here.acc, color: "#0E4561", weight: 1,
+                   fillColor: "#0E4561", fillOpacity: .08 }).addTo(map);
+      }
+      var pts = BOOTHS.map(function (b) { return [b.lat, b.lon]; });
+      pts.push([here.lat, here.lon]);
+      map.fitBounds(L.latLngBounds(pts).pad(0.25));
+    }
+    $("map").classList.remove("hidden");
+    setTimeout(function () { map.invalidateSize(); }, 60);
+    return true;
+  }
+
+  // ---- location -------------------------------------------------------
+  function withLocation(cb) {
+    if (!navigator.geolocation) {
+      cb(null, "This browser cannot share a location.");
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      function (pos) {
+        cb({ lat: pos.coords.latitude, lon: pos.coords.longitude,
+             acc: pos.coords.accuracy }, null);
+      },
+      function (err) {
+        cb(null, err.code === 1
+          ? "Location permission was declined."
+          : "Could not get a location fix. Indoors this can take a moment \u2014 try again near a window.");
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 30000 }
+    );
+  }
+
+  function showNearby() {
+    $("loc-ask").classList.add("hidden");
+    withLocation(function (here, err) {
+      if (err) {
+        fillList($("nearlist"), {});
+        $("near-title").textContent = "Booths on campus";
+        $("near-note").textContent = err +
+          " You can still use the list above.";
+        return;
+      }
+      BOOTHS.forEach(function (b) {
+        b._d = metres(here.lat, here.lon, b.lat, b.lon);
+        b._dir = bearing(here.lat, here.lon, b.lat, b.lon);
+      });
+      var sorted = BOOTHS.slice().sort(function (a, b) { return a._d - b._d; });
+      fillList($("nearlist"), { here: true, number: true, click: function (b) {
+        return function () { booth = b; start(); };
+      }});
+      $("near-title").textContent = "Nearest first";
+      var n = sorted[0];
+      $("near-note").textContent =
+        "Nearest is " + n.name + ", about " + pretty(n._d) + " " + n._dir +
+        ". Distances are straight-line, not walking routes.";
+      drawMap(here, n);
+    });
+  }
+
+  // ---- wiring ---------------------------------------------------------
+  $("btn-take").addEventListener("click", function () {
+    var open = openLoan();
+    if (open) {
+      var w = new Date(open.at).toLocaleTimeString([],
+                { hour: "2-digit", minute: "2-digit" });
+      $("ref-detail").textContent = "Your card already has umbrella " +
+        open.slot + " out. You took it from " + open.fromName + " at " + w +
+        " and it has not come back yet. Return it to any booth and you can " +
+        "borrow again.";
+      show("refused");
+      return;
+    }
+    show("reading");
+    var n = 0;
+    var t = setInterval(function () {
+      $("dots-anim").textContent = "\u00b7".repeat(1 + (n % 3)) || "\u00b7";
+      if (++n > 5) {
+        clearInterval(t);
+        var used = Math.max(0, CAP - inBooth(booth.id));
+        var slot = Math.min(CAP, used + 3);
+        state.in[booth.id] = Math.max(0, inBooth(booth.id) - 1);
+        state.loans[CARD] = { from: booth.id, fromName: booth.name,
+                              slot: slot, at: Date.now() };
+        save();
+        $("slotno").textContent = slot;
+        $("slotmsg").textContent = "Take the umbrella in slot " + slot + ".";
+        show("unlocked");
+      }
+    }, 130);
+  });
+  $("btn-done").addEventListener("click", function () {
+    $("loanmsg").textContent =
+      "Due back by the end of the school day. Return it to any booth.";
+    show("loaned");
+  });
+  $("btn-again").addEventListener("click", function () { paint(); show("home"); });
+  $("btn-return").addEventListener("click", function () {
+    var open = openLoan();
+    if (!open) {
+      $("loanmsg").textContent = "This card has no umbrella out.";
+      show("loaned");
+      return;
+    }
+    delete state.loans[CARD];
+    // the umbrella is physically here now, whichever booth it came from
+    state.in[booth.id] = Math.min(CAP, inBooth(booth.id) + 1);
+    save();
+    $("loanmsg").textContent = open.from === booth.id
+      ? "Returned. Your record has been cleared."
+      : "Returned to " + booth.name + " (taken from " + open.fromName +
+        "). Your record has been cleared.";
+    show("loaned");
+  });
+  $("btn-ref-back").addEventListener("click", function () { paint(); show("home"); });
+  $("btn-find").addEventListener("click", function () {
+    $("loc-ask").classList.remove("hidden");
+    fillList($("nearlist"), {});
+    $("near-title").textContent = "Booths on campus";
+    $("near-note").textContent = "";
+    show("nearby");
+  });
+  $("btn-close-near").addEventListener("click", function () { show("home"); });
+  $("btn-loc").addEventListener("click", showNearby);
+
+  if (!DEMO) $("warn").classList.remove("hidden");
+
+  // ---- coordinate capture mode ----------------------------------------
+  var setloc = params.get("setloc");
+  if (setloc) {
+    var which = findBooth(setloc) || { id: setloc, name: "booth " + setloc };
+    $("cap-note").textContent = "Capturing for booth " + which.id +
+      " \u2014 " + which.name + ".";
+    $("btn-cap").addEventListener("click", function () {
+      withLocation(function (here, err) {
+        if (err) { $("cap-coords").textContent = err; return; }
+        $("cap-coords").textContent =
+          "lat: " + here.lat.toFixed(5) + ", lon: " + here.lon.toFixed(5) +
+          "   (\u00b1" + Math.round(here.acc) + " m)";
+      });
+    });
+    show("capture");
+    return;
+  }
+
+  if (booth) {
+    start();
+  } else {
+    fillList($("picklist"), { click: function (b) {
+      return function () {
+        booth = b;
+        history.replaceState(null, "", "?b=" + b.id);
+        start();
+      };
+    }});
+    show("pick");
+  }
+})();
+</script>
+</body>
+</html>
